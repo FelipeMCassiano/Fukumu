@@ -59,9 +59,9 @@ func child() {
 
 	rootfsDir := filepath.Join("./containers", containerId)
 
-	syscall.Sethostname([]byte("container"))
+	checkErr(syscall.Sethostname([]byte("container")), "child(): syscall Sethostname")
 	unzipImage(rootfsDir, "./ubuntu-base-20.04.1-base-amd64.tar.gz")
-	syscall.Mount("proc", "proc", "proc", 0, "")
+	checkErr(syscall.Mount("proc", "proc", "proc", 0, ""), "child(): syscall mount")
 
 	cmd := exec.Command(os.Args[2], os.Args[3:]...)
 	cmd.Stdin = os.Stdin
@@ -83,10 +83,8 @@ func cg() {
 	cgroups := "/sys/fs/cgroup"
 	fukumu := filepath.Join(cgroups, "Fukumu")
 
-	// Ensure the cgroup directory exists
 	ensureDir(fukumu)
 
-	// Write configuration files for cgroup v2
 	checkErr(os.WriteFile(filepath.Join(fukumu, "pids.max"), []byte("20"), 0700), "write pids.max")
 	checkErr(os.WriteFile(filepath.Join(fukumu, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700), "write cgroup.procs")
 }
