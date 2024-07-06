@@ -59,9 +59,8 @@ func child() {
 
 	rootfsDir := filepath.Join("./containers", containerId)
 
-	checkErr(syscall.Sethostname([]byte("container")), "child(): syscall Sethostname")
+	checkErr(syscall.Sethostname([]byte("container")), "child(): Sethostname")
 	unzipImage(rootfsDir, "./ubuntu-base-20.04.1-base-amd64.tar.gz")
-	checkErr(syscall.Mount("proc", "proc", "proc", 0, ""), "child(): syscall mount")
 
 	cmd := exec.Command(os.Args[2], os.Args[3:]...)
 	cmd.Stdin = os.Stdin
@@ -69,6 +68,7 @@ func child() {
 	cmd.Stderr = os.Stderr
 	pivotRoot(rootfsDir)
 
+	checkErr(syscall.Mount("proc", "proc", "proc", 0, ""), "child(): syscall mount")
 	checkErr(cmd.Run(), "run child()")
 	syscall.Unmount("/proc", 0)
 }
