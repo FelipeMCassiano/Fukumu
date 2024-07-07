@@ -1,7 +1,6 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	"log"
 	"os"
@@ -44,9 +43,6 @@ func run() {
 	checkErr(cmd.Run(), "run run()")
 }
 
-// go:embed ubuntu-base-20.04.1-base-amd64.tar.gz
-var f embed.FS
-
 func child() {
 	fmt.Printf("Running %v as %d\n", os.Args[2], os.Getpid())
 
@@ -70,7 +66,7 @@ func child() {
 
 	checkErr(syscall.Mount("proc", "proc", "proc", 0, ""), "child(): syscall mount")
 	checkErr(cmd.Run(), "run child()")
-	syscall.Unmount("/proc", 0)
+	checkErr(syscall.Unmount("/proc", 0), "child(): syscall Unmount")
 }
 
 func ensureDir(path string) {
