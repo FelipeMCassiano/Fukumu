@@ -40,7 +40,7 @@ func run() {
 		Unshareflags: syscall.CLONE_NEWNS,
 	}
 
-	checkErr(cmd.Run(), "run run()")
+	checkErr(cmd.Run(), "cmd.run()")
 }
 
 func child() {
@@ -83,6 +83,8 @@ func cg() {
 
 	checkErr(os.WriteFile(filepath.Join(fukumu, "pids.max"), []byte("20"), 0700), "write pids.max")
 	checkErr(os.WriteFile(filepath.Join(fukumu, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700), "write cgroup.procs")
+	// checkErr(os.WriteFile(filepath.Join(fukumu, "memory.max"), []byte(strconv.Itoa(memoryMax)), 0700), "write memory.max")
+	// checkErr(os.WriteFile(filepath.Join(fukumu, "memory.min"), []byte(strconv.Itoa(6*int(math.Pow(2, 20)))), 0700), "write memory.max")
 }
 
 func pivotRoot(newRoot string) {
