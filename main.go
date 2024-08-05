@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,10 +11,22 @@ import (
 	"syscall"
 
 	"github.com/google/uuid"
+	"github.com/pelletier/go-toml/v2"
 )
+
+type Config struct {
+	Containers []containers
+}
+
+type containers struct {
+	Memory string
+}
+
+var cfg *Config
 
 func init() {
 	checkErr(os.MkdirAll("./containers", 0700), "init containers dir")
+	cfg = ReadConfig()
 }
 
 func main() {
@@ -39,14 +52,24 @@ func run() {
 		Cloneflags:   syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 		Unshareflags: syscall.CLONE_NEWNS,
 	}
+	checkErr(cmd.Start(), "cmd.start")
 
-	checkErr(cmd.Run(), "cmd.run()")
+	checkErr(cmd.Wait(), "cmd.wait()")
 }
 
 func child() {
-	fmt.Printf("Running %v as %d\n", os.Args[2], os.Getpid())
+	fmt.Printf("Running %v as %d\n", os.Args[1], os.Getpid())
+	c := cfg.Containers[0]
+	memoryMaxInt, err := strconv.Atoi(string(c.Memory[len(c.Memory)-3]))
+	checkErr(err, "child(): atoi")
+	switch c.Memory[len(c.Memory)-2] {
+	case 'M':
+		memoryMaxInt = memoryMaxInt * int(math.Pow(2, 20))
+	case 'G':
+		memoryMaxInt = memoryMaxInt * int(math.Pow(2, 30))
+	}
 
-	cg()
+	cg(memoryMaxInt)
 
 	uid, err := uuid.NewRandom()
 	checkErr(err, "child(): uuid")
@@ -75,7 +98,7 @@ func ensureDir(path string) {
 	}
 }
 
-func cg() {
+func cg(memoryMax int) {
 	cgroups := "/sys/fs/cgroup"
 	fukumu := filepath.Join(cgroups, "Fukumu")
 
@@ -83,8 +106,8 @@ func cg() {
 
 	checkErr(os.WriteFile(filepath.Join(fukumu, "pids.max"), []byte("20"), 0700), "write pids.max")
 	checkErr(os.WriteFile(filepath.Join(fukumu, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700), "write cgroup.procs")
-	// checkErr(os.WriteFile(filepath.Join(fukumu, "memory.max"), []byte(strconv.Itoa(memoryMax)), 0700), "write memory.max")
-	// checkErr(os.WriteFile(filepath.Join(fukumu, "memory.min"), []byte(strconv.Itoa(6*int(math.Pow(2, 20)))), 0700), "write memory.max")
+	checkErr(os.WriteFile(filepath.Join(fukumu, "memory.max"), []byte(strconv.Itoa(memoryMax)), 0700), "write memory.max")
+	checkErr(os.WriteFile(filepath.Join(fukumu, "memory.min"), []byte(strconv.Itoa(6*int(math.Pow(2, 20)))), 0700), "write memory.max")
 }
 
 func pivotRoot(newRoot string) {
@@ -102,6 +125,21 @@ func unzipImage(dest, src string) {
 
 	cmd := exec.Command("tar", []string{"-xzf", src, "-C", dest}...)
 	checkErr(cmd.Run(), "unzipImage: cmd run")
+}
+
+func ReadConfig() *Config {
+	doc, err := os.ReadFile("fukumu.toml")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	var cfg Config
+	err = toml.Unmarshal([]byte(doc), &cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return &cfg
 }
 
 func checkErr(err error, context string) {
