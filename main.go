@@ -3,14 +3,15 @@ package main
 import (
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"syscall"
 
 	"github.com/google/uuid"
+	"github.com/pbnjay/memory"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -36,6 +37,8 @@ func main() {
 		run()
 	case "child":
 		child()
+	case "clean":
+		os.RemoveAll(CreateFukumuPath())
 	default:
 		log.Fatal("bad command")
 	}
@@ -43,6 +46,14 @@ func main() {
 
 func run() {
 	fmt.Printf("Running %v as %d\n", os.Args[2], os.Getpid())
+
+	mMax, mMin := SetMemory()
+	limit := syscall.Rlimit{
+		Cur: uint64(mMin),
+		Max: uint64(mMax),
+	}
+
+	checkErr(syscall.Setrlimit(syscall.RLIMIT_AS, &limit), "syscall.setrlimit()")
 
 	cmd := exec.Command("/proc/self/exe", append([]string{"child"}, os.Args[2:]...)...)
 	cmd.Stdin = os.Stdin
@@ -52,24 +63,35 @@ func run() {
 		Cloneflags:   syscall.CLONE_NEWUTS | syscall.CLONE_NEWPID | syscall.CLONE_NEWNS,
 		Unshareflags: syscall.CLONE_NEWNS,
 	}
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	checkErr(cmd.Start(), "cmd.start")
 
-	checkErr(cmd.Wait(), "cmd.wait()")
+	go func() {
+		<-sigChan
+		if err := cmd.Process.Kill(); err != nil {
+			fmt.Printf("Failed to kill process: %v\n", err)
+		}
+	}()
+
+	err := cmd.Wait()
+	if err != nil {
+		exitError, ok := err.(*exec.ExitError)
+		if ok {
+			ws := exitError.Sys().(syscall.WaitStatus)
+			fmt.Printf("Process exited with status: %d\n", ws.ExitStatus())
+			if ws.Signaled() {
+				fmt.Printf("Process was killed by signal: %s\n", ws.Signal())
+			}
+		}
+		os.Exit(1)
+	}
 }
 
 func child() {
 	fmt.Printf("Running %v as %d\n", os.Args[1], os.Getpid())
-	c := cfg.Containers[0]
-	memoryMaxInt, err := strconv.Atoi(string(c.Memory[len(c.Memory)-3]))
-	checkErr(err, "child(): atoi")
-	switch c.Memory[len(c.Memory)-2] {
-	case 'M':
-		memoryMaxInt = memoryMaxInt * int(math.Pow(2, 20))
-	case 'G':
-		memoryMaxInt = memoryMaxInt * int(math.Pow(2, 30))
-	}
-
-	cg(memoryMaxInt)
+	mMax, mMin := SetMemory()
+	cg(mMax, mMin)
 
 	uid, err := uuid.NewRandom()
 	checkErr(err, "child(): uuid")
@@ -88,6 +110,7 @@ func child() {
 	pivotRoot(rootfsDir)
 
 	checkErr(syscall.Mount("proc", "proc", "proc", 0, ""), "child(): syscall mount")
+
 	checkErr(cmd.Run(), "run child()")
 	checkErr(syscall.Unmount("/proc", 0), "child(): syscall Unmount")
 }
@@ -98,16 +121,22 @@ func ensureDir(path string) {
 	}
 }
 
-func cg(memoryMax int) {
-	cgroups := "/sys/fs/cgroup"
-	fukumu := filepath.Join(cgroups, "Fukumu")
-
+func cg(memoryMax, memoryMin int) {
+	fukumu := CreateFukumuPath()
 	ensureDir(fukumu)
+	if memoryMax >= int(memory.FreeMemory()) {
+		log.Fatal("Memory allocated bigger than memory free in system")
+	}
+	if memoryMax < memoryMin {
+		fmt.Println("memoryMax:", memoryMax, "memoryMin:", memoryMin)
+		log.Fatal("memoryMax minor than memoryMin")
+	}
 
 	checkErr(os.WriteFile(filepath.Join(fukumu, "pids.max"), []byte("20"), 0700), "write pids.max")
 	checkErr(os.WriteFile(filepath.Join(fukumu, "cgroup.procs"), []byte(strconv.Itoa(os.Getpid())), 0700), "write cgroup.procs")
 	checkErr(os.WriteFile(filepath.Join(fukumu, "memory.max"), []byte(strconv.Itoa(memoryMax)), 0700), "write memory.max")
-	checkErr(os.WriteFile(filepath.Join(fukumu, "memory.min"), []byte(strconv.Itoa(6*int(math.Pow(2, 20)))), 0700), "write memory.max")
+	checkErr(os.WriteFile(filepath.Join(fukumu, "memory.min"), []byte(strconv.Itoa(memoryMin)), 0700), "write memory.min")
+	checkErr(os.WriteFile(filepath.Join(fukumu, "memory.high"), []byte(strconv.Itoa(memoryMax)), 0700), "write memory.high")
 }
 
 func pivotRoot(newRoot string) {
@@ -140,6 +169,31 @@ func ReadConfig() *Config {
 	}
 
 	return &cfg
+}
+
+func SetMemory() (int, int) {
+	// TODO: iterate through the containers
+	c := cfg.Containers[0]
+	fmt.Println("contianer memory", c.Memory)
+	memoryMax, err := strconv.Atoi(string(c.Memory[:len(c.Memory)-2]))
+	fmt.Println("memoryMaxInt", memoryMax)
+	checkErr(err, "child(): atoi")
+	switch c.Memory[len(c.Memory)-2] {
+	case 'M':
+		memoryMax = memoryMax * 1024 * 1024
+	case 'G':
+		memoryMax = memoryMax * 1024 * 1024 * 1024
+	}
+
+	memoryMin := 2 * 1024 * 1024 * 1024 // 2GB
+
+	return memoryMax, memoryMin
+}
+
+func CreateFukumuPath() string {
+	cgroups := "/sys/fs/cgroup"
+	filepath.Join(cgroups)
+	return filepath.Join(cgroups, "fukumu")
 }
 
 func checkErr(err error, context string) {
